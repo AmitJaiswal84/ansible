@@ -1,0 +1,63 @@
+- name: Install and configure Nginx (Production Ready)
+  hosts: web
+  become: yes
+  tasks:
+
+    # Update and upgrade system
+    - name: Update apt cache and upgrade system
+      apt:
+        update_cache: yes
+        upgrade: dist
+      when: ansible_os_family == "Debian"
+
+    # Install Nginx
+    - name: Install Nginx on Ubuntu/Debian
+      apt:
+        name: nginx
+        state: present
+      when: ansible_os_family == "Debian"
+
+    # Ensure Nginx is running and enabled
+    - name: Ensure Nginx is running
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    # Allow HTTP (80) and HTTPS (443) via UFW firewall
+    - name: Allow HTTP and HTTPS in UFW
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      with_items:
+        - 80
+        - 443
+      when: ansible_os_family == "Debian"
+
+    # Deploy a basic production nginx config
+    - name: Deploy Nginx config
+      copy:
+        dest: /etc/nginx/sites-available/default
+        content: |
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+
+              server_name _;
+
+              root /var/www/html;
+              index index.html index.htm;
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+          }
+      notify: Reload Nginx
+
+  handlers:
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
+
