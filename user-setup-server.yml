@@ -1,0 +1,185 @@
+- name: Complete server setup (users, SSH, Nginx, Node.js, etc.)
+  hosts: web
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3   # ✅ Ensures Python 3 is used everywhere
+
+  vars_prompt:
+    - name: "root_pass"
+      prompt: "Enter password to set for root user"
+      private: yes
+
+    - name: "new_user"
+      prompt: "Enter username to create"
+
+    - name: "user_pass"
+      prompt: "Enter password for new user"
+      private: yes
+
+  vars:
+    apt_prerequisites:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - software-properties-common
+    other_packages:
+      - nano
+      - curl
+      - git
+      - nginx
+      - ufw
+      - tmux
+      - htop
+      - ncdu
+
+  pre_tasks:
+    - name: Ensure python3 and pip are installed
+      apt:
+        name:
+          - python3
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Ensure passlib is installed (override system restriction)
+      command: python3 -m pip install passlib --break-system-packages
+      args:
+        creates: /usr/lib/python3/dist-packages/passlib
+
+  tasks:
+    # --- SSH and User Setup ---
+    - name: Ensure OpenSSH server is installed
+      apt:
+        name: openssh-server
+        state: present
+
+    - name: Enable and start SSH service
+      systemd:
+        name: ssh
+        state: started
+        enabled: yes
+
+    - name: Set root password
+      user:
+        name: root
+        password: "{{ root_pass | password_hash('sha512') }}"
+
+    - name: Allow root login and password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?{{ item.key }}'
+        line: "{{ item.key }} {{ item.value }}"
+      loop:
+        - { key: 'PermitRootLogin', value: 'yes' }
+        - { key: 'PasswordAuthentication', value: 'yes' }
+
+    - name: Restart SSH service
+      service:
+        name: ssh
+        state: restarted
+
+    - name: Create new user
+      user:
+        name: "{{ new_user }}"
+        password: "{{ user_pass | password_hash('sha512') }}"
+        shell: /bin/bash
+        state: present
+        create_home: yes
+
+    - name: Add new user to sudo group
+      user:
+        name: "{{ new_user }}"
+        groups: sudo
+        append: yes
+
+    # --- System & Network Setup ---
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Install prerequisites
+      apt:
+        name: "{{ apt_prerequisites }}"
+        state: present
+
+    - name: Install other packages
+      apt:
+        name: "{{ other_packages }}"
+        state: present
+        update_cache: yes
+
+    # --- UFW Firewall Setup ---
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Set default incoming policy to deny
+      ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Set default outgoing policy to allow
+      ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: 22
+
+    - name: Allow HTTP
+      ufw:
+        rule: allow
+        port: 80
+
+    - name: Allow HTTPS
+      ufw:
+        rule: allow
+        port: 443
+
+    - name: Allow Nginx HTTP profile
+      ufw:
+        rule: allow
+        name: "Nginx HTTP"
+
+    - name: Show UFW status
+      command: ufw status verbose
+      register: ufw_status
+      changed_when: false
+
+    - name: Display UFW status
+      debug:
+        msg: "{{ ufw_status.stdout_lines }}"
+
+    # --- Node.js via NVM ---
+    - name: Install NVM if not installed
+      shell: |
+        export NVM_DIR="$HOME/.nvm"
+        if [ ! -d "$NVM_DIR" ]; then
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Load NVM and install latest Node.js LTS
+      shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        nvm install --lts
+        nvm alias default 'lts/*'
+        nvm use default
+      args:
+        executable: /bin/bash
+
+    - name: Confirm setup completion
+      debug:
+        msg: "✅ Server setup complete! SSH enabled, root and '{{ new_user }}' created, Nginx, UFW, and Node.js installed successfully."
